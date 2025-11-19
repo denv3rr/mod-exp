@@ -1,10 +1,12 @@
 A modular-exponentiation **visualizer** that generates repeating sequences and maps them into dynamic ASCII animations.
 
+---
+
 > [!NOTE]
 >  
 > **Incomplete.** Create a pull request or submit issues if you see them.
 
----
+# Info
 
 <details>
   <summary>Toggle C++ CLI Info</summary>
