@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mod-Exp</title>
+<style>
+html,body{
+  margin:0;padding:0;overflow:hidden;
+  background:#000;font-family:Consolas;color:#0cf;
+}
+#gl{
+  position:fixed;top:0;left:0;width:100%;height:100%;
+}
+#ui,#debugWin{
+  position:fixed;top:10px;right:10px;
+  background:rgba(0,0,0,.3);padding:10px;
+  border-radius:10px;border:1px solid #0cf4;
+  backdrop-filter:blur(4px);z-index:20;
+  font-size:13px;max-width:220px;
+}
+#debugWin{
+  top:auto;bottom:10px;max-height:40%;overflow:auto;display:none;
+}
+#toggle{
+  position:fixed;top:10px;right:10px;
+  font-size:24px;cursor:pointer;z-index:30;
+}
+#debugToggle{
+  position:fixed;bottom:10px;left:10px;
+  font-size:16px;cursor:pointer;z-index:30;color:#0cf;
+}
+input,select,button{
+  width:150px;margin-top:4px;
+  background:#0005;color:#0cf;
+  border:1px solid #0cf9;padding:4px;
+}
+#watermark{
+  position:fixed;top:10px;left:10px;width:80px;z-index:25;
+}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<img id="watermark"
+     src="https://raw.githubusercontent.com/denv3rr/denv3rr/main/IMG_4225.gif" />
+
+<div id="toggle">☰</div>
+<div id="debugToggle">toggle debug</div>
+
+<div id="ui">
+  <b>Mod-Exp Visualizer</b><br><br>
+  Base:<br><input id="base" value="2"><br>
+  Mod:<br><input id="mod" value="61"><br>
+  Accent:<br><input id="accent" type="color" value="#00c8ff"><br>
+  Mode:<br>
+  <select id="mode">
+    <option value="plasma">Plasma (BUG)</option>
+    <option value="osc">Oscilloscope</option>
+    <option value="lis">Lissajous (BUG)</option>
+    <option value="attr">Attractor (BUG)</option>
+    <option value="torus">Torus Knot</option>
+    <option value="dna">DNA</option>
+    <option value="planet">Planetary (BUG)</option>
+  </select><br>
+  <button id="regen">Regenerate</button>
+  <button id="pause">Pause</button>
+</div>
+
+<div id="debugWin"></div>
+
+<script>
+// ===== DEBUG WINDOW =====
+const dWin=document.getElementById("debugWin");
+function logd(m){
+  dWin.style.display="block";
+  dWin.textContent+=m+"\n";
+}
+document.getElementById("debugToggle").onclick=()=>{
+  dWin.style.display = dWin.style.display==="none"?"block":"none";
+};
+
+// ===== WEBGL2 INIT =====
+const glc=document.getElementById("gl");
+const gl=glc.getContext("webgl2");
+if(!gl){ alert("WebGL2 not supported."); }
+
+let osc=null, octx=null;
+
+function resize(){
+  glc.width=innerWidth;
+  glc.height=innerHeight;
+  gl.viewport(0,0,glc.width,glc.height);
+  if(osc){
+    osc.width=glc.width;
+    osc.height=glc.height;
+  }
+}
+addEventListener("resize",resize);
+gl.clearColor(0,0,0,1);
+gl.enable(gl.DEPTH_TEST);
+
+// ===== SHADER UTILS =====
+function compile(t,src){
+  const s=gl.createShader(t);
+  gl.shaderSource(s,src);
+  gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))
+    logd("Shader error: "+gl.getShaderInfoLog(s));
+  return s;
+}
+function program(vs,fs){
+  const p=gl.createProgram();
+  gl.attachShader(p,compile(gl.VERTEX_SHADER,vs));
+  gl.attachShader(p,compile(gl.FRAGMENT_SHADER,fs));
+  gl.linkProgram(p);
+  if(!gl.getProgramParameter(p,gl.LINK_STATUS))
+    logd("Link error: "+gl.getProgramInfoLog(p));
+  return p;
+}
+
+// ===== PLASMA SHADER =====
+const vsQuad=`#version 300 es
+layout(location=0) in vec2 p;
+void main(){ gl_Position=vec4(p,0.0,1.0); }
+`;
+const fsPlasma=`#version 300 es
+precision highp float;
+uniform float t;
+out vec4 o;
+void main(){
+  float v = sin(t + gl_FragCoord.x*0.01)
+          + cos(t*1.3 + gl_FragCoord.y*0.01);
+  o = vec4(0.25+0.25*v, 0.6, 1.0, 1.0);
+}
+`;
+const plasmaProg=program(vsQuad,fsPlasma);
+const quad=gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER,quad);
+gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([
+  -1,-1, 1,-1, -1, 1,
+   1,-1, 1, 1, -1, 1
+]),gl.STATIC_DRAW);
+
+// ===== LINE SHADER (3D MODES, WITH TIME ROTATION) =====
+const vs3D=`#version 300 es
+precision highp float;
+uniform mat4 M;
+uniform float uTime;
+layout(location=0) in vec3 pos;
+void main(){
+  float a = uTime;
+  float ca = cos(a);
+  float sa = sin(a);
+  vec3 p = pos;
+  // rotate around Y using time
+  p.x = ca*pos.x + sa*pos.z;
+  p.z = -sa*pos.x + ca*pos.z;
+  gl_Position = M * vec4(p,1.0);
+}
+`;
+const fs3D=`#version 300 es
+precision highp float;
+uniform vec3 A;
+out vec4 o;
+void main(){ o=vec4(A/255.0,1.0); }
+`;
+const lineProg=program(vs3D,fs3D);
+const lineBuf=gl.createBuffer();
+const uMLoc   = gl.getUniformLocation(lineProg,"M");
+const uAColor = gl.getUniformLocation(lineProg,"A");
+const uTime   = gl.getUniformLocation(lineProg,"uTime");
+
+// ===== CAMERA (ORBIT + ZOOM LIMITS) =====
+let rx=0,ry=0;
+let zoom=2.5;
+let dragging=false;
+let px=0,py=0;
+
+glc.onmousedown=e=>{ dragging=true; px=e.clientX; py=e.clientY; };
+onmouseup=()=>dragging=false;
+onmousemove=e=>{
+  if(!dragging) return;
+  ry+=(e.clientX-px)*0.01;
+  rx+=(e.clientY-py)*0.01;
+  px=e.clientX; py=e.clientY;
+};
+glc.onwheel=e=>{
+  zoom+=e.deltaY*0.001;
+  zoom=Math.min(Math.max(zoom,0.5),6.0);
+};
+
+function M(){
+  const cx=Math.cos(rx), sx=Math.sin(rx);
+  const cy=Math.cos(ry), sy=Math.sin(ry);
+  const s=1.0/zoom;
+  return new Float32Array([
+    cy*s,    sy*sx*s,  sy*cx*s,  0,
+    0,       cx*s,     -sx*s,    0,
+   -sy*s,    cy*sx*s,  cy*cx*s,  0,
+    0,       0,        0,        1
+  ]);
+}
+
+// ===== MOD-EXP & PARTIALS =====
+function modexp(b,e,m){
+  let r=1%m, cur=b%m;
+  while(e>0){
+    if(e&1) r=(r*cur)%m;
+    cur=(cur*cur)%m;
+    e>>=1;
+  }
+  return r;
+}
+function genSeq(b,m){
+  const set=new Set(), seq=[];
+  for(let i=1;i<2000;i++){
+    const v=modexp(b,i,m);
+    if(set.has(v)) break;
+    set.add(v); seq.push(v);
+  }
+  return seq;
+}
+function partials(seq){
+  const P={f:[],w:[],a:[],p:[]};
+  const N=Math.min(seq.length,8);
+  for(let i=0;i<N;i++){
+    const v=seq[i];
+    P.f.push(.3+((v%10)+1)*0.1);
+    P.w.push(.4+((v%15)+1)*0.08);
+    P.a.push(1/(1+i*0.3));
+    P.p.push((v%360)*Math.PI/180);
+  }
+  return P;
+}
+
+// initial values
+let P=partials(genSeq(2,61));
+let accent=[0,200,255];
+let mode="plasma";
+let run=true;
+let dynSpeed=1.0;
+
+function updateDynamicSpeed(){
+  if(!P || !P.f.length){ dynSpeed=1.0; return; }
+  const avgF=P.f.reduce((a,b)=>a+b,0)/P.f.length;
+  dynSpeed=0.3*avgF; // arbitrary but mod-exp dependent
+}
+
+// ===== MODE GEOMETRY GENERATORS =====
+function makeLiss(P){
+  const a=[];
+  for(let i=0;i<1000;i++){
+    const t=i/1000;
+    let X=0,Y=0,Z=0;
+    for(let k=0;k<P.f.length;k++){
+      X+=P.a[k]*Math.sin(2*Math.PI*(P.f[k]*t)+P.p[k]);
+      Y+=P.a[k]*Math.cos(2*Math.PI*(P.w[k]*t)+P.p[k]);
+      Z+=P.a[k]*Math.sin(2*Math.PI*(1.3*P.f[k]*t)+P.p[k]*0.5);
+    }
+    a.push(X,Y,Z);
+  }
+  logd("[LISSAJOUS] vertices="+a.length/3);
+  return new Float32Array(a);
+}
+
+function makeAttr(P){
+  const a=[];
+  let x=0,y=0,z=0,dt=0.01;
+  for(let i=0;i<3000;i++){
+    let fx=0,fy=0,fz=0;
+    for(let k=0;k<P.f.length;k++){
+      fx+=P.a[k]*Math.sin(P.f[k]*x+P.p[k]);
+      fy+=P.a[k]*Math.sin(P.f[k]*y+P.p[k]);
+      fz+=P.a[k]*Math.sin(P.f[k]*z+P.p[k]);
+    }
+    x+=fx*dt; y+=fy*dt; z+=fz*dt;
+    a.push(x,y,z);
+  }
+  logd("[ATTRACTOR] vertices="+a.length/3);
+  return new Float32Array(a);
+}
+
+function makeTorus(P){
+  const a=[];
+  const p=Math.max(2,Math.floor(P.f[0]*2));
+  const q=Math.max(3,Math.floor(P.w[0]*2));
+  for(let i=0;i<1500;i++){
+    const t=i/1500*Math.PI*4;
+    const R=0.7,r=0.3;
+    const x=(R+r*Math.cos(p*t))*Math.cos(q*t);
+    const y=(R+r*Math.cos(p*t))*Math.sin(q*t);
+    const z=r*Math.sin(p*t);
+    a.push(x,y,z);
+  }
+  logd("[TORUS] p="+p+" q="+q+" vertices="+a.length/3);
+  return new Float32Array(a);
+}
+
+function makeDNA(P){
+  const a=[];
+  const stretch=P.w.reduce((x,y)=>x+y)/P.w.length;
+  const radius=P.a.reduce((x,y)=>x+y)/P.a.length;
+  for(let i=0;i<1000;i++){
+    const t=i/1000*stretch*Math.PI*2;
+    const x=Math.cos(t)*radius;
+    const y=Math.sin(t)*radius;
+    const z=i/1000*2-1;
+    a.push(x,y,z);
+    a.push(-x,-y,z);
+  }
+  logd("[DNA] vertices="+a.length/3);
+  return new Float32Array(a);
+}
+
+function makePlanet(P){
+  const a=[];
+  const N=P.f.length;
+  for(let i=0;i<1000;i++){
+    const t=i/1000*2*Math.PI;
+    for(let k=0;k<N;k++){
+      const r=0.3+P.f[k]*0.05;
+      const x=r*Math.cos(P.w[k]*t+P.p[k]);
+      const y=0.0;
+      const z=r*Math.sin(P.w[k]*t+P.p[k]);
+      a.push(x,y,z);
+    }
+  }
+  logd("[PLANETARY] bodies="+P.f.length+" vertices="+a.length/3);
+  return new Float32Array(a);
+}
+
+// ===== GEOMETRY CACHE =====
+let geomCache={};   // mode -> Float32Array
+function rebuildCurrentGeometry(){
+  if(mode==="plasma"||mode==="osc") return;
+  if(!P || !P.f.length) return;
+  if(mode==="lis")    geomCache.lis    = makeLiss(P);
+  if(mode==="attr")   geomCache.attr   = makeAttr(P);
+  if(mode==="torus")  geomCache.torus  = makeTorus(P);
+  if(mode==="dna")    geomCache.dna    = makeDNA(P);
+  if(mode==="planet") geomCache.planet = makePlanet(P);
+}
+
+// ===== OSCILLOSCOPE CANVAS =====
+osc=document.createElement("canvas");
+osc.width=glc.width; osc.height=glc.height;
+osc.style="position:fixed;top:0;left:0;pointer-events:none;z-index:5";
+document.body.appendChild(osc);
+octx=osc.getContext("2d");
+
+function drawOsc(P,t){
+  octx.clearRect(0,0,osc.width,osc.height);
+  octx.strokeStyle=`rgb(${accent[0]},${accent[1]},${accent[2]})`;
+  octx.beginPath();
+  const mid=osc.height/2;
+  for(let x=0;x<osc.width;x++){
+    const xn=x/osc.width;
+    let y=0;
+    for(let k=0;k<P.f.length;k++)
+      y+=P.a[k]*Math.sin(2*Math.PI*(P.f[k]*xn)+P.w[k]*t+P.p[k]);
+    const py=mid-y*(osc.height*0.1);
+    if(x===0) octx.moveTo(x,py); else octx.lineTo(x,py);
+  }
+  octx.stroke();
+}
+
+// ===== UI HOOKS =====
+const ui=document.getElementById("ui");
+document.getElementById("toggle").onclick=()=>{
+  ui.style.display = ui.style.display==="none" ? "block" : "none";
+};
+
+document.getElementById("mode").onchange=e=>{
+  mode=e.target.value;
+  rebuildCurrentGeometry();
+};
+document.getElementById("pause").onclick=()=>run=!run;
+document.getElementById("accent").oninput=e=>{
+  const c=e.target.value;
+  accent=[
+    parseInt(c.substr(1,2),16),
+    parseInt(c.substr(3,2),16),
+    parseInt(c.substr(5,2),16)
+  ];
+};
+document.getElementById("regen").onclick=regen;
+document.getElementById("base").addEventListener("keydown",e=>{
+  if(e.key==="Enter") regen();
+});
+document.getElementById("mod").addEventListener("keydown",e=>{
+  if(e.key==="Enter") regen();
+});
+
+function regen(){
+  const b=parseInt(base.value),
+        m=parseInt(mod.value);
+  if(isNaN(b)||isNaN(m)||m<=0) return;
+  P=partials(genSeq(b,m));
+  geomCache={}; // invalidate cache
+  updateDynamicSpeed();
+  logd("Regenerated partials (base="+b+" mod="+m+").");
+  rebuildCurrentGeometry();
+}
+
+// ===== MAIN RENDER LOOP =====
+function loop(ms){
+  if(run){
+    const t=ms/1000;
+    if(mode==="plasma"){
+      octx.clearRect(0,0,osc.width,osc.height);
+      gl.useProgram(plasmaProg);
+      gl.bindBuffer(gl.ARRAY_BUFFER,quad);
+      gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
+      gl.enableVertexAttribArray(0);
+      gl.uniform1f(gl.getUniformLocation(plasmaProg,"t"),t);
+      gl.drawArrays(gl.TRIANGLES,0,6);
+    } else if(mode==="osc"){
+      drawOsc(P,t);
+    } else {
+      octx.clearRect(0,0,osc.width,osc.height);
+      gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+      gl.useProgram(lineProg);
+      gl.uniform3f(uAColor,accent[0],accent[1],accent[2]);
+      gl.uniformMatrix4fv(uMLoc,false,M());
+      gl.uniform1f(uTime, t*dynSpeed);
+
+      let data=geomCache[mode];
+      if(!data){
+        rebuildCurrentGeometry();
+        data=geomCache[mode];
+      }
+      if(data){
+        gl.bindBuffer(gl.ARRAY_BUFFER,lineBuf);
+        gl.bufferData(gl.ARRAY_BUFFER,data,gl.DYNAMIC_DRAW);
+        gl.vertexAttribPointer(0,3,gl.FLOAT,false,0,0);
+        gl.enableVertexAttribArray(0);
+        gl.drawArrays(gl.LINE_STRIP,0,data.length/3);
+      }
+    }
+  }
+  requestAnimationFrame(loop);
+}
+
+resize();
+updateDynamicSpeed();
+rebuildCurrentGeometry();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

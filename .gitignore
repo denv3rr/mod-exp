@@ -1,11 +1,15 @@
 #ignore everything
 *
-*/
 
-#unignores
+#unignore specific file types
 !*.cpp
 !*.h
+!*.html
+!*.css
 !.gitignore
 !README.md
-!docs/mod-exp.html
 !LICENSE
+
+#unignore folders
+!docs/
+!docs/**
