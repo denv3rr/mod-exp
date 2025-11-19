@@ -7,3 +7,5 @@
 !*.h
 !.gitignore
 !README.md
+!docs/mod-exp.html
+!LICENSE
